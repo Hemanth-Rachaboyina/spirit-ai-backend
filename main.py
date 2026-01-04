@@ -38,6 +38,7 @@ class EvaluationRequest(BaseModel):
     topic: str
     difficulty: str
     qa_list: List[QAItem]
+    user_id: str = "anonymous" # Optional for backward compatibility
 
 @app.post("/api/generate-mock-test")
 async def generate_test(request: TopicRequest):
@@ -66,6 +67,14 @@ async def evaluate_interview_endpoint(request: EvaluationRequest):
         # Convert Pydantic models to dicts
         qa_list_dicts = [item.dict() for item in request.qa_list]
         evaluation = evaluate_interview(request.topic, request.difficulty, qa_list_dicts)
+        
+        # Save to Firebase if user_id is provided
+        if request.user_id and request.user_id != "anonymous":
+            try:
+                save_interview_result(request.user_id, request.topic, request.difficulty, evaluation)
+            except Exception as e:
+                print(f"Failed to save interview result: {e}")
+                
         return evaluation
     except Exception as e:
         print(f"Error evaluating interview: {e}")
@@ -74,6 +83,35 @@ async def evaluate_interview_endpoint(request: EvaluationRequest):
 @app.get("/")
 def read_root():
     return {"message": "AI Interview Simulator Backend is running"}
+
+from firebase_utils import initialize_firebase, save_test_result, save_interview_result
+
+# Initialize Firebase
+initialize_firebase()
+
+class TestSubmission(BaseModel):
+    user_id: str
+    topic: str
+    difficulty: str
+    score: float
+    total_questions: int
+
+@app.post("/api/submit-test")
+async def submit_test(submission: TestSubmission):
+    try:
+        print(f"Saving test result for user: {submission.user_id}")
+        save_test_result(
+            submission.user_id, 
+            submission.topic, 
+            submission.difficulty, 
+            submission.score, 
+            submission.total_questions
+        )
+        return {"message": "Test result saved successfully"}
+    except Exception as e:
+        print(f"Error saving test result: {e}")
+        # Don't fail the request if saving fails (graceful degradation)
+        return {"message": "Failed to save result", "error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

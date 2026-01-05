@@ -11,15 +11,27 @@ def initialize_firebase():
         # Check if app is already initialized
         firebase_admin.get_app()
     except ValueError:
-        # Check for service account file
+        # 1. Try Environment Variable (Production/Railway)
+        env_creds = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
         cred_path = "serviceAccountKey.json"
         
+        if env_creds:
+            try:
+                cred_dict = json.loads(env_creds)
+                cred = credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred)
+                print("Firebase Admin initialized from Environment Variable")
+                return
+            except json.JSONDecodeError as e:
+                print(f"Error parsing FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
+
+        # 2. Try Local File (Development)
         if os.path.exists(cred_path):
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred)
             print("Firebase Admin initialized with serviceAccountKey.json")
         else:
-            print("Warning: serviceAccountKey.json not found. Database writes will fail.")
+            print("Warning: No Firebase credentials found (checked Env Var and local file). Database writes will fail.")
 
 def save_test_result(user_id: str, topic: str, difficulty: str, score: float, total_questions: int):
     """
@@ -60,7 +72,8 @@ def save_test_result(user_id: str, topic: str, difficulty: str, score: float, to
             
             # Calculate new average
             new_total = current_total + 1
-            new_avg = ((current_avg * current_total) + (score / total_questions * 100)) / new_total
+            # Score is already percentage from frontend
+            new_avg = ((current_avg * current_total) + score) / new_total
             
             user_ref.update({
                 "totalTests": new_total,
@@ -71,7 +84,8 @@ def save_test_result(user_id: str, topic: str, difficulty: str, score: float, to
             # Create new user profile if not exists
             user_ref.set({
                 "totalTests": 1,
-                "averageScore": (score / total_questions * 100),
+                "averageScore": score,
+                "interviewCount": 0,
                 "interviewHours": 0,
                 "streakDays": 1,
                 "joinedAt": firestore.SERVER_TIMESTAMP
@@ -110,12 +124,26 @@ def save_interview_result(user_id: str, topic: str, difficulty: str, feedback: d
         db.collection("users").document(user_id).collection("activities").add(activity_data)
         
         # Update aggregates
+        # Update aggregates with average score recalculation
         user_ref = db.collection("users").document(user_id)
-        # Simple increment for now, logic can be expanded
-        user_ref.update({
+        doc = user_ref.get()
+        
+        updates = {
             "interviewCount": firestore.Increment(1),
             "lastActive": firestore.SERVER_TIMESTAMP
-        })
+        }
+
+        if doc.exists:
+            data = doc.to_dict()
+            current_total_tests = data.get("totalTests", 0) # We might want to track separate interview avg? 
+            # For now, let's keep "averageScore" as a global metric for both tests and interviews?
+            # Or usually "Average Score" on dashboard means "Quiz Score". 
+            # I will Leave Average Score ONLY for Mock Tests to avoid confusing the user, 
+            # as interviews are subjective (0-100 but diff criteria).
+            # So I will ONLY increment interviewCount here.
+            pass
+        
+        user_ref.update(updates)
         print("DEBUG: Successfully saved Interview result")
     except Exception as e:
         print(f"CRITICAL ERROR Saving Interview: {e}")
